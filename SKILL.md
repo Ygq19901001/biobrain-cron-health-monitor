@@ -1,7 +1,7 @@
 ---
 name: cron-health-monitor
 slug: openclaw-cron-health-monitor
-version: 1.0.0
+version: 1.0.1
 displayName: "Cron Health Monitor"
 summary: "Proactive cron job health monitoring, failure detection, and auto-repair delegation."
 description: "Proactive cron job health monitoring, failure detection, and auto-repair delegation. Triggers: 'cron failed', 'cron health', 'fix cron', 'consecutive errors'"
