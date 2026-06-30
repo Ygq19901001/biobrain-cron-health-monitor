@@ -1,82 +1,218 @@
-# Cron Repair Playbook
+# Repair Playbook — 修复操作手册
 
-## Step-by-Step Repair Process
+Step-by-step repair procedures for every failure pattern. Follow exactly. Verify before closing.
 
-### 1. Identify the Failure
+---
+
+## Playbook A: Fix Message Tool Failure
+
+**Estimated time**: 5 minutes
+**Risk**: Low (payload change only, no data loss)
+
+### Step 1: Identify the failing job
 ```
-cron(action="get", jobId="<your-job-id>")
-```
-Check `state.consecutiveErrors`, `state.lastError`, `state.lastRunStatus`
-
-### 2. Classify the Error
-Match against common-errors.md patterns:
-- "Message failed" → Pattern A
-- "LLM request failed" → Pattern B
-- "Write failed" → Pattern C
-- Timeout → Pattern D
-- No output → Pattern E
-
-### 3. Apply the Fix
-
-**For Pattern A (Message failed):**
-```
-cron(action="update", jobId="<your-job-id>", patch={
-  payload: {
-    message: "Original prompt... IMPORTANT: Send result via sessions_send to main. Do NOT use message tool."
-  }
-})
+cron(action="get", jobId="<failing-job-id>")
+→ Note: payload.message content, sessionTarget, delivery config
 ```
 
-**For Pattern B (LLM failed):**
+### Step 2: Rewrite the payload
+Replace any reference to `message` tool with `sessions_send` to main:
 ```
-cron(action="update", jobId="<your-job-id>", patch={
-  payload: {
-    model: "zai/glm-4-flash",
-    fallbacks: ["zai/glm-4-flash"]
-  }
-})
+Old: "Send daily report to Feishu using message tool"
+New: "Send daily report via sessions_send to main session. 禁止使用message工具。"
 ```
 
-**For Pattern C (Write failed):**
-Add directory creation to the payload message:
+### Step 3: Remove or fix delivery config
+If `delivery.mode` is `announce` and it's failing, either:
+- Set `delivery.mode` to `none` (let the agent handle delivery via sessions_send)
+- Or fix the delivery channel auth
+
+### Step 4: Update the cron
 ```
-message: "...First create the output directory with exec(mkdir -p), then write the file..."
+cron(action="update", jobId="<job-id>", patch={payload: {message: "<new-message>"}})
 ```
 
-**For Pattern D (Timeout):**
+### Step 5: Test
 ```
-cron(action="update", jobId="<your-job-id>", patch={
-  payload: { timeoutSeconds: 600, lightContext: true }
-})
-```
-
-**For Pattern E (No output):**
-```
-cron(action="update", jobId="<your-job-id>", patch={
-  payload: {
-    message: "Original prompt... CRITICAL: Do NOT reply HEARTBEAT_OK. Execute fully and write results."
-  }
-})
+cron(action="run", jobId="<job-id>", runMode="force")
+→ Wait 2 minutes → cron(action="get", jobId="<job-id>")
+→ Verify: lastRunStatus="ok", consecutiveErrors reset to 0
 ```
 
-### 4. Verify the Fix
-After patching, trigger an immediate test run:
-```
-cron(action="run", jobId="<your-job-id>")
-```
-Wait for completion, then check `cron(action="get", jobId="<your-job-id>")` for `lastRunStatus`.
+### Verification checklist:
+- [ ] Job ran successfully
+- [ ] Main session received the message (check sessions_send receipt)
+- [ ] No new errors in next scheduled run
+- [ ] Update the payload template in your skill/cron-templates to prevent recurrence
 
-### 5. Document the Repair
-Log the repair in the relevant department's notes:
+---
+
+## Playbook B: Fix Model Provider Failure
+
+**Estimated time**: 10 minutes
+**Risk**: Low to Medium (model switch may affect output quality)
+
+### Step 1: Diagnose the exact error
 ```
-write path="company/departments/{dept}/repair_log_YYYYMMDD.md"
+cron(action="get", jobId="<job-id>")
+→ Note: state.lastError content
 ```
 
-## Escalation Path
+### Step 2: Check provider status
+For the failing model, verify:
+- API key is still valid (check provider config)
+- Model name hasn't changed (check provider's current model list)
+- Provider isn't rate-limiting or down
 
-| Level | Action |
-|-------|--------|
-| 1. Auto-fix | Apply known pattern fix |
-| 2. Re-test | Trigger manual run, verify |
-| 3. Escalate | If 2 fixes fail → flag for CEO |
-| 4. Disable | If critical and unfixable → disable cron |
+### Step 3: Select fallback model
+Priority order for free-tier internal ops:
+1. `zai/glm-4-flash` — most reliable free option
+2. `doubao/doubao-seed-2-0-mini` — ByteDance free tier
+3. `baidu/ernie-speed` — Baidu permanent free
+
+### Step 4: Apply the fix
+Option A — Switch model:
+```
+cron(action="update", jobId="<job-id>", patch={payload: {model: "zai/glm-4-flash"}})
+```
+
+Option B — Add fallback chain:
+```
+cron(action="update", jobId="<job-id>", patch={payload: {fallbacks: ["doubao/doubao-seed-2-0-mini", "baidu/ernie-speed"]}})
+```
+
+### Step 5: Test
+```
+cron(action="run", jobId="<job-id>", runMode="force")
+→ Verify: job completes, output is correct model, no errors
+```
+
+### If switch also fails:
+Escalate to CEO with: original model, error, attempted fallback, result. Do not continue switching.
+
+---
+
+## Playbook C: Fix File Path Failure
+
+**Estimated time**: 5 minutes
+**Risk**: None (filesystem operations only)
+
+### Step 1: Identify the failing path
+```
+cron(action="get", jobId="<job-id>")
+→ Note: state.lastError — the ENOENT or permission error contains the exact path
+```
+
+### Step 2: Diagnose
+Does the path use template variables? (`{workspace_root_dir}`, `{date}`, etc.)
+- YES → Replace with concrete relative path
+- NO → Check if parent directory exists
+
+### Step 3a: Create missing directories
+```
+exec: mkdir -p <parent-directory-path>
+```
+Or update payload message to instruct the agent to create the directory before writing.
+
+### Step 3b: Fix template variable
+Replace `{workspace_root_dir}/company/departments/brand/` with `company/departments/brand/` (relative to workspace root).
+
+### Step 4: Update and test
+```
+cron(action="update", jobId="<job-id>", patch={payload: {message: "<fixed-message>"}})
+cron(action="run", jobId="<job-id>", runMode="force")
+→ Verify: output file exists at expected path with expected content
+```
+
+---
+
+## Playbook D: Fix Context Overflow
+
+**Estimated time**: 10 minutes
+**Risk**: Low (configuration change)
+
+### Step 1: Confirm it's context overflow
+- Error mentions "token limit" or "context length" or output is truncated
+- `lightContext` is `false` or absent
+- Task is complex (report generation, multi-step processing)
+
+### Step 2: Apply lightContext
+```
+cron(action="update", jobId="<job-id>", patch={payload: {lightContext: true}})
+```
+
+### Step 3: If still failing with lightContext
+The task itself is too large. Options:
+- Split into 2+ smaller cron jobs (sequential, staggered by 5 minutes)
+- Reduce output requirements (e.g., 500 words → 300 words)
+- Increase `timeoutSeconds`
+
+### Step 4: Test and verify
+Run the job and check output completeness.
+
+---
+
+## Playbook E: Fix Rate Limit Cascade
+
+**Estimated time**: 15 minutes
+**Risk**: Medium (rescheduling affects all staggered jobs)
+
+### Step 1: Identify the collision
+List all jobs with the same cron minute:
+```
+cron(action="list")
+→ Filter: jobs with same schedule minute and same model provider
+```
+
+### Step 2: Redistribute
+Minimum 2-minute gap between jobs using the same provider. 1-minute gap if different providers.
+
+### Step 3: Update each job
+```
+cron(action="update", jobId="<job-id>", patch={schedule: {expr: "<new-expr>"}})
+```
+
+### Step 4: Document the new stagger
+Update your stagger table reference so the next person doesn't re-collapse it.
+
+---
+
+## Playbook F: Fix Silent "Success"
+
+**Estimated time**: 10 minutes
+**Risk**: None (payload instruction change)
+
+### Step 1: Confirm it's silent success
+- `consecutiveErrors: 0`, `lastRunStatus: "ok"`
+- Output file missing, empty, or contains only "HEARTBEAT_OK"
+
+### Step 2: Rewrite payload to be explicit
+Add to the agentTurn message:
+- "禁止回复HEARTBEAT_OK" (forbid the heartbeat acknowledgment)
+- "必须写入文件后退出" (must write file before exit)
+- "如果无法完成任务，写入错误原因到文件而不是静默退出"
+
+### Step 3: Simplify the task
+Silent success often means the agent was confused. More specific instructions:
+```
+BAD:  "Search for industry trends and write a report"
+GOOD: "搜索2026年6月AI行业3条最新动态。写入3个要点到company/departments/brand/trends_20260626.md。每条≤100字。完成后退出。"
+```
+
+### Step 4: Update and test
+```
+cron(action="update", jobId="<job-id>", patch={payload: {message: "<new-explicit-message>"}})
+cron(action="run", jobId="<job-id>", runMode="force")
+→ Manually open output file → Verify content exists and is on-topic
+```
+
+---
+
+## When All Playbooks Fail
+
+If you've followed the playbook and the job still fails:
+1. Disable the job: `cron(action="update", jobId="<job-id>", patch={enabled: false})`
+2. Write incident report to `company/shared/alerts/INCIDENT_<jobId>_YYYYMMDD.md`
+3. Include: job config, error history, what you tried, why it didn't work
+4. Escalate to CEO with the incident report path
+5. Do NOT keep retrying. A disabled job is honest. A failing job is lying.

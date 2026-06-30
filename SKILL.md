@@ -1,7 +1,7 @@
 ---
 name: openclaw-cron-health-monitor
 slug: openclaw-cron-health-monitor
-version: 1.1.1
+version: 1.5.0
 displayName: "Cron Health Monitor — cron健康监控与自动修复"
 summary: "主动式cron健康监控：静默失败检测/六种失败模式诊断/自动修复委派/三模监控全覆盖。cron不会告诉你它死了——这个Skill会。"
 description: "主动式cron健康监控与自动修复系统：六种失败模式全覆盖（静默消失/模板展开/API耗尽/通讯静默/上下文溢出/内容腐化）+三模监控（按钉/轮询/被动）+自动修复委派。cron不会告诉你它死了——从consecutiveErrors=0时就能闻到不对劲。触发词：「cron失败」「cron健康」「定时任务监控」「cron修复」「cron检查」「consecutiveErrors」「定时任务故障」「任务监控」"
